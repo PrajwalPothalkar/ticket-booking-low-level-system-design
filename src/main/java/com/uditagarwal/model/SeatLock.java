@@ -1,26 +1,26 @@
 package com.uditagarwal.model;
 
-
-import com.uditagarwal.model.Seat;
-import com.uditagarwal.model.Show;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
+import lombok.NonNull;
 
 import java.time.Instant;
-import java.util.Date;
 
-@AllArgsConstructor
 @Getter
+@AllArgsConstructor
 public class SeatLock {
-    private Seat seat;
-    private Show show;
-    private Integer timeoutInSeconds;
-    private Date lockTime;
-    private String lockedBy;
+
+    private final Seat seat;
+    private final Show show;
+    private final int timeoutInSeconds;
+    private final Instant lockTime;
+    private final String lockedBy;
+
+    public boolean isLockExpired(@NonNull final Instant now) {
+        return lockTime.plusSeconds(timeoutInSeconds).isBefore(now);
+    }
 
     public boolean isLockExpired() {
-        final Instant lockInstant = lockTime.toInstant().plusSeconds(timeoutInSeconds);
-        final Instant currentInstant = new Date().toInstant();
-        return lockInstant.isBefore(currentInstant);
+        return isLockExpired(Instant.now());
     }
 }

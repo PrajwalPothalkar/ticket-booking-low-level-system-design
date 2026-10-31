@@ -1,0 +1,19 @@
+spring:
+  application:
+    name: lld-ticket-booking
+  main:
+    banner-mode: off
+
+# No web server is started because spring-boot-starter-web is not on the classpath.
+booking:
+  lock-timeout-seconds: 600      # UserBookingSession timeout
+  max-seats-per-booking: 10
+  expiry-scan-interval-ms: 30000 # how often stale sessions are swept
+
+payment:
+  # Case 2 of the problem statement assumes zero retries.
+  allowed-retries: 0
+
+logging:
+  level:
+    root: WARN

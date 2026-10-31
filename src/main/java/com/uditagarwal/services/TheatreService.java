@@ -1,75 +1,56 @@
 package com.uditagarwal.services;
 
+import com.uditagarwal.exceptions.AlreadyExistsException;
 import com.uditagarwal.exceptions.NotFoundException;
 import com.uditagarwal.model.Screen;
 import com.uditagarwal.model.Seat;
 import com.uditagarwal.model.Theatre;
-import lombok.NonNull;
+import com.uditagarwal.repository.TheatreRepository;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Service;
 
-import java.util.HashMap;
-import java.util.Map;
 import java.util.UUID;
 
+@Service
+@RequiredArgsConstructor
 public class TheatreService {
 
-    private final Map<String, Theatre> theatres;
-    private final Map<String, Screen> screens;
-    private final Map<String, Seat> seats;
+    private final TheatreRepository theatreRepository;
 
-    public TheatreService() {
-        this.theatres = new HashMap<>();
-        this.screens = new HashMap<>();
-        this.seats = new HashMap<>();
+    public Theatre getTheatre(final String theatreId) {
+        return theatreRepository.findTheatreById(theatreId)
+                .orElseThrow(() -> new NotFoundException("Theatre not found: " + theatreId));
     }
 
-    public Seat getSeat(@NonNull final String seatId) {
-        if (!seats.containsKey(seatId)) {
-            throw new NotFoundException();
-        }
-        return seats.get(seatId);
+    public Screen getScreen(final String screenId) {
+        return theatreRepository.findScreenById(screenId)
+                .orElseThrow(() -> new NotFoundException("Screen not found: " + screenId));
     }
 
-    public Theatre getTheatre(@NonNull final String theatreId) {
-        if (!theatres.containsKey(theatreId)) {
-            throw new NotFoundException();
-        }
-        return theatres.get(theatreId);
+    public Seat getSeat(final String seatId) {
+        return theatreRepository.findSeatById(seatId)
+                .orElseThrow(() -> new NotFoundException("Seat not found: " + seatId));
     }
 
-    public Screen getScreen(@NonNull final String screenId) {
-        if (!screens.containsKey(screenId)) {
-            throw new NotFoundException();
-        }
-        return screens.get(screenId);
+    public Theatre createTheatre(final String theatreName) {
+        return theatreRepository.saveTheatre(new Theatre(UUID.randomUUID().toString(), theatreName));
     }
 
-    public Theatre createTheatre(@NonNull final String theatreName) {
-        String theatreId = UUID.randomUUID().toString();
-        Theatre theatre = new Theatre(theatreId, theatreName);
-        theatres.put(theatreId, theatre);
-        return theatre;
-    }
-
-    public Screen createScreenInTheatre(@NonNull final String screenName, @NonNull final Theatre theatre) {
-        Screen screen = createScreen(screenName, theatre);
+    public Screen createScreenInTheatre(final String screenName, final Theatre theatre) {
+        final Screen screen = new Screen(UUID.randomUUID().toString(), screenName, theatre);
         theatre.addScreen(screen);
-        return screen;
+        return theatreRepository.saveScreen(screen);
     }
 
-    public Seat createSeatInScreen(@NonNull final Integer rowNo, @NonNull final Integer seatNo, @NonNull final Screen screen) {
-        String seatId = UUID.randomUUID().toString();
-        Seat seat = new Seat(seatId, rowNo, seatNo);
-        seats.put(seatId, seat);
+    public Seat createSeatInScreen(final int rowNo, final int seatNo, final Screen screen) {
+        final boolean seatExists = screen.getSeats().stream()
+                .anyMatch(seat -> seat.getRowNo() == rowNo && seat.getSeatNo() == seatNo);
+        if (seatExists) {
+            throw new AlreadyExistsException(
+                    "Seat already exists at row " + rowNo + ", seat " + seatNo);
+        }
+        final Seat seat = new Seat(UUID.randomUUID().toString(), rowNo, seatNo);
         screen.addSeat(seat);
-
-        return seat;
+        return theatreRepository.saveSeat(seat);
     }
-
-    private Screen createScreen(final String screenName, final Theatre theatre) {
-        String screenId = UUID.randomUUID().toString();
-        Screen screen = new Screen(screenId, screenName, theatre);
-        screens.put(screenId, screen);
-        return screen;
-    }
-
 }

@@ -1,41 +1,55 @@
 package com.uditagarwal.providers;
 
-import com.google.common.collect.ImmutableList;
+import com.uditagarwal.config.BookingProperties;
 import com.uditagarwal.exceptions.SeatTemporaryUnavailableException;
 import com.uditagarwal.model.Seat;
 import com.uditagarwal.model.SeatLock;
 import com.uditagarwal.model.Show;
 import lombok.NonNull;
+import org.springframework.stereotype.Component;
 
-import java.util.*;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * In-memory seat lock store.
+ *
+ * Every public method is synchronized because a lock store is read and written
+ * concurrently. Mutating a HashMap from multiple threads (the previous version)
+ * could corrupt its internal state or spin forever.
+ */
+@Component
 public class InMemorySeatLockProvider implements SeatLockProvider {
 
-    private final Integer lockTimeout; // Bonus feature.
-    private final Map<Show, Map<Seat, SeatLock>> locks;
+    private final int lockTimeoutSeconds;
+    private final Map<Show, Map<Seat, SeatLock>> locks = new ConcurrentHashMap<>();
 
-    public InMemorySeatLockProvider(@NonNull final Integer lockTimeout) {
-        this.locks = new HashMap<>();
-        this.lockTimeout = lockTimeout;
+    public InMemorySeatLockProvider(final BookingProperties bookingProperties) {
+        this.lockTimeoutSeconds = bookingProperties.lockTimeoutSeconds();
     }
 
     @Override
-    synchronized public void lockSeats(@NonNull final Show show, @NonNull final List<Seat> seats,
+    public synchronized void lockSeats(@NonNull final Show show, @NonNull final List<Seat> seats,
                                        @NonNull final String user) {
         for (Seat seat : seats) {
             if (isSeatLocked(show, seat)) {
                 throw new SeatTemporaryUnavailableException();
             }
         }
-
         for (Seat seat : seats) {
-            lockSeat(show, seat, user, lockTimeout);
+            locks.computeIfAbsent(show, ignored -> new HashMap<>())
+                    .put(seat, new SeatLock(seat, show, lockTimeoutSeconds, Instant.now(), user));
         }
     }
 
     @Override
-    public void unlockSeats(@NonNull final Show show, @NonNull final List<Seat> seats, @NonNull final String user) {
-        for (Seat seat: seats) {
+    public synchronized void unlockSeats(@NonNull final Show show, @NonNull final List<Seat> seats,
+                                         @NonNull final String user) {
+        for (Seat seat : seats) {
             if (validateLock(show, seat, user)) {
                 unlockSeat(show, seat);
             }
@@ -43,41 +57,58 @@ public class InMemorySeatLockProvider implements SeatLockProvider {
     }
 
     @Override
-    public boolean validateLock(@NonNull final Show show, @NonNull final Seat seat, @NonNull final String user) {
-        return isSeatLocked(show, seat) && locks.get(show).get(seat).getLockedBy().equals(user);
+    public synchronized boolean validateLock(@NonNull final Show show, @NonNull final Seat seat,
+                                             @NonNull final String user) {
+        final Map<Seat, SeatLock> seatLocks = locks.get(show);
+        if (seatLocks == null) {
+            return false;
+        }
+        final SeatLock lock = seatLocks.get(seat);
+        return lock != null && !lock.isLockExpired() && lock.getLockedBy().equals(user);
     }
 
     @Override
-    public List<Seat> getLockedSeats(@NonNull final Show show) {
-        if (!locks.containsKey(show)) {
-            return ImmutableList.of();
+    public synchronized List<Seat> getLockedSeats(@NonNull final Show show) {
+        final Map<Seat, SeatLock> seatLocks = locks.get(show);
+        if (seatLocks == null) {
+            return List.of();
         }
         final List<Seat> lockedSeats = new ArrayList<>();
-
-        for (Seat seat : locks.get(show).keySet()) {
-            if (isSeatLocked(show, seat)) {
-                lockedSeats.add(seat);
+        final Instant now = Instant.now();
+        for (Map.Entry<Seat, SeatLock> entry : seatLocks.entrySet()) {
+            if (!entry.getValue().isLockExpired(now)) {
+                lockedSeats.add(entry.getKey());
             }
         }
         return lockedSeats;
     }
 
-    private void unlockSeat(final Show show, final Seat seat) {
-        if (!locks.containsKey(show)) {
-            return;
-        }
-        locks.get(show).remove(seat);
+    @Override
+    public synchronized void cleanupExpiredLocks() {
+        final Instant now = Instant.now();
+        locks.entrySet().removeIf(showEntry -> {
+            showEntry.getValue().entrySet().removeIf(lockEntry -> lockEntry.getValue().isLockExpired(now));
+            return showEntry.getValue().isEmpty();
+        });
     }
 
-    private void lockSeat(final Show show, final Seat seat, final String user, final Integer timeoutInSeconds) {
-        if (!locks.containsKey(show)) {
-            locks.put(show, new HashMap<>());
+    private void unlockSeat(final Show show, final Seat seat) {
+        final Map<Seat, SeatLock> seatLocks = locks.get(show);
+        if (seatLocks == null) {
+            return;
         }
-        final SeatLock lock = new SeatLock(seat, show, timeoutInSeconds, new Date(), user);
-        locks.get(show).put(seat, lock);
+        seatLocks.remove(seat);
+        if (seatLocks.isEmpty()) {
+            locks.remove(show);
+        }
     }
 
     private boolean isSeatLocked(final Show show, final Seat seat) {
-        return locks.containsKey(show) && locks.get(show).containsKey(seat) && !locks.get(show).get(seat).isLockExpired();
+        final Map<Seat, SeatLock> seatLocks = locks.get(show);
+        if (seatLocks == null) {
+            return false;
+        }
+        final SeatLock lock = seatLocks.get(seat);
+        return lock != null && !lock.isLockExpired();
     }
 }
